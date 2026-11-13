@@ -1,6 +1,6 @@
 import { command, form, getRequestEvent, query } from '$app/server';
 import { error, invalid } from '@sveltejs/kit';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { book, orderItem, series } from '#lib/server/db/schema.js';
 import { isUniqueViolation } from '#lib/server/db/errors.js';
@@ -19,6 +19,9 @@ import {
 	parseBoughtAtMonth,
 	parseReadingDate
 } from '#lib/shared/validation/book.js';
+import z from 'zod';
+import { bookSearchScore, bookTermCondition } from './books/conditions.js';
+import { tokenize } from '#lib/shared/search.js';
 
 export const createBook = form(CreateBookSchema, async (data, issue) => {
 	const { locals } = getRequestEvent();
@@ -535,3 +538,66 @@ export const markOwned = command(UpdateBookStatusSchema, async (data) => {
 		.set({ status: 'Owned' })
 		.where(and(eq(book.id, data.id), eq(book.userId, locals.user.id)));
 });
+
+export const getBooks = query(
+	z.object({
+		count: z.number().int().positive(),
+		page: z.number().int().positive(),
+		search: z.string().trim().optional()
+	}),
+	async (params) => {
+		const { locals } = getRequestEvent();
+
+		if (!locals.user) {
+			logger.warn('Unauthorized books fetch attempt');
+			error(401, 'Unauthorized');
+		}
+
+		const userId = locals.user.id;
+		const terms = params.search ? tokenize(params.search) : [];
+		const where = and(
+			eq(book.userId, userId),
+			...terms.map((term) => bookTermCondition(term, userId))
+		);
+		const score = terms.length > 0 ? bookSearchScore(terms) : null;
+		const selection = db
+			.select({
+				id: book.id,
+				seriesId: book.seriesId,
+				volumeNumber: book.volumeNumber,
+				isbn: book.isbn,
+				status: book.status,
+				readStatus: book.readStatus,
+				currencyCode: book.currencyCode,
+				paidPrice: book.paidPrice,
+				originalPrice: book.originalPrice,
+				boughtAt: book.boughtAt,
+				startedAt: book.startedAt,
+				completedAt: book.completedAt,
+				readCount: book.readCount,
+				coverFileId: book.coverFileId,
+				seriesTitle: series.title,
+				seriesAuthor: series.author
+			})
+			.from(book)
+			.innerJoin(series, eq(book.seriesId, series.id))
+			.where(where);
+		const pageQuery = score
+			? selection.orderBy(desc(score), asc(series.title), asc(book.volumeNumber))
+			: selection.orderBy(asc(series.title), asc(book.volumeNumber));
+
+		const [countRows, books] = await Promise.all([
+			db
+				.select({ count: count() })
+				.from(book)
+				.innerJoin(series, eq(book.seriesId, series.id))
+				.where(where),
+			pageQuery.limit(params.count).offset(params.count * (params.page - 1))
+		]);
+
+		const total = Number(countRows.at(0)?.count ?? 0);
+		logger.debug({ userId, bookCount: books.length, total }, 'Fetched user books');
+
+		return { books, total };
+	}
+);

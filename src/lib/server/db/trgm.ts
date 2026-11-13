@@ -23,7 +23,27 @@ export function compareNumeric(column: Column | SQL, operator: SearchOperator, v
 	return sql`${column} ${sql.raw(operator)} ${target}`;
 }
 
+export function compareEnum(column: Column | SQL, operator: SearchOperator, value: string): SQL {
+	if (operator === '!=') return sql`${column} != ${value}`;
+	return sql`${column} = ${value}`;
+}
+
 export function compareDate(column: Column | SQL, operator: SearchOperator, value: string): SQL {
+	const relative = value.match(/^(\d+)([dmy])$/);
+	if (relative) {
+		const amount = Number(relative[1]);
+		const unit = relative[2] === 'd' ? 'day' : relative[2] === 'm' ? 'month' : 'year';
+		const flipped: Record<SearchOperator, SearchOperator> = {
+			'>': '<',
+			'<': '>',
+			'>=': '<=',
+			'<=': '>=',
+			'=': '=',
+			'!=': '!='
+		};
+		return sql`${column}::date ${sql.raw(flipped[operator])} (current_date - ${amount} * ${sql.raw(`interval '1 ${unit}'`)})`;
+	}
+
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return sql`false`;
 
 	return sql`${column}::date ${sql.raw(operator)} ${value}::date`;
