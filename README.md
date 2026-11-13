@@ -94,7 +94,7 @@ See `messages/en.json` for reference
 - [Drizzle ORM](https://orm.drizzle.team/) + [postgres.js](https://github.com/porsager/postgres) + PostgreSQL
 - [Better Auth](https://www.better-auth.com/)
 - [Paraglide](https://inlang.com/)
-- [Fuse.js](https://www.fusejs.io/), [LayerChart](https://layerchart.com/) + [Date FNS](https://date-fns.org/)
+- [LayerChart](https://layerchart.com/) + [Date FNS](https://date-fns.org/)
 - [Zod](https://zod.dev/), [Pino](https://getpino.io/)
 
 ## Getting started

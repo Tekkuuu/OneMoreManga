@@ -29,9 +29,6 @@ importers:
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0
-      fuse.js:
-        specifier: ^7.5.0
-        version: 7.5.0
       layerchart:
         specifier: ^2.9.2
         version: 2.9.2(@sveltejs/kit@3.1.1(@sveltejs/vite-plugin-svelte@7.3.1(@voidzero-dev/vite-plus-core@1.5.0(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(svelte@5.57.3))(@voidzero-dev/vite-plus-core@1.5.0(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(svelte@5.57.3)(typescript@6.0.3))(svelte@5.57.3)(zod@4.6.7)
@@ -2942,10 +2939,6 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
-
-  fuse.js@7.5.0:
-    resolution: {integrity: sha512-sQtrEfA+ez/3G0cCZecF70oqpCRttCexYUG4mUrtWL49ULUzUyxokt5kyqwtKzj1270RaKih+hcP3qLcumccow==}
-    engines: {node: '>=10'}
 
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
@@ -6436,8 +6429,6 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
-
-  fuse.js@7.5.0: {}
 
   gensync@1.0.0-beta.2: {}
 

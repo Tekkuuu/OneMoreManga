@@ -462,11 +462,6 @@ export const updateBookReadStatus = command(UpdateBookReadStatusSchema, async (d
 		.where(and(eq(book.id, data.id), eq(book.userId, locals.user.id)));
 });
 
-/**
- * Updates just the reading progress (Started, Finished, read count) of an owned
- * book. Fired as individual fields change in the detail view, so any subset may
- * be omitted. Dates stay independent of the read status.
- */
 export const updateBookProgress = command(UpdateBookProgressSchema, async (data) => {
 	const { locals } = getRequestEvent();
 

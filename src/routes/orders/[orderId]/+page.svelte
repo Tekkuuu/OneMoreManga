@@ -2,7 +2,7 @@
 	import { goto, refreshAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import ConfirmDialog from '#lib/components/ui/ConfirmDialog.svelte';
-	import { createOrderAdjustment } from '#lib/remote/orders.remote.js';
+	import { createOrderAdjustment, searchBooksForOrder } from '#lib/remote/orders.remote.js';
 	import { createOrderItem } from '#lib/remote/orders.remote.js';
 	import { deleteOrder } from '#lib/remote/orders.remote.js';
 	import { deleteOrderAdjustment } from '#lib/remote/orders.remote.js';
@@ -44,7 +44,6 @@
 		type ComboboxRootProps
 	} from '@skeletonlabs/skeleton-svelte';
 	import { format } from 'date-fns';
-	import Fuse from 'fuse.js';
 	import { tick } from 'svelte';
 
 	let { data } = $props();
@@ -128,18 +127,9 @@
 		order.adjustments.reduce((sum, item) => sum + Number(item.amount ?? 0), 0)
 	);
 
-	const bookItemsFuse = $derived(
-		new Fuse(data.books, {
-			keys: [
-				{ name: 'title', weight: 0.7 },
-				{ name: 'volumeNumber', weight: 0.3 }
-			],
-			threshold: 0.4,
-			ignoreLocation: true
-		})
-	);
+	type BookOption = { id: string; title: string; volumeNumber: number };
 
-	let bookItems = $state<typeof data.books>([]);
+	let bookItems = $state<BookOption[]>([]);
 	const booksCollection = $derived(
 		useListCollection({
 			items: bookItems,
@@ -148,34 +138,24 @@
 		})
 	);
 
-	let isQueryTooBroad = $state(false);
+	let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 	const booksFilter: ComboboxRootProps['onInputValueChange'] = (event) => {
 		const query = event.inputValue?.trim() ?? '';
 
-		if (!query) {
+		clearTimeout(searchDebounce);
+		if (query === '') {
 			bookItems = [];
-			isQueryTooBroad = false;
 			return;
 		}
 
-		const results = bookItemsFuse.search(query);
-
-		if (results.length > 100) {
-			bookItems = [];
-			isQueryTooBroad = true;
-		} else if (results.length > 0) {
-			bookItems = results.map((result) => result.item);
-			isQueryTooBroad = false;
-		} else {
-			bookItems = [];
-			isQueryTooBroad = false;
-		}
+		searchDebounce = setTimeout(async () => {
+			bookItems = await searchBooksForOrder({ orderId: order.id, search: query });
+		}, 250);
 	};
 
 	function resetItemForm() {
 		selectedBook = undefined;
 		bookItems = [];
-		isQueryTooBroad = false;
 		createOrderItem.fields.bookId.set('');
 	}
 
@@ -450,11 +430,7 @@
 							<Portal>
 								<Combobox.Positioner>
 									<Combobox.Content>
-										{#if isQueryTooBroad}
-											<div class="p-2 text-sm text-surface-500">
-												{m.order_detail_too_many()}
-											</div>
-										{:else if bookItems.length === 0}
+										{#if bookItems.length === 0}
 											<div class="p-2 text-sm text-surface-500">
 												{m.order_detail_type_search()}
 											</div>

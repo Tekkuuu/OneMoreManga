@@ -1,14 +1,14 @@
 import { command, form, getRequestEvent, query } from '$app/server';
 import { error, invalid, redirect } from '@sveltejs/kit';
-import { and, count, desc, eq, exists, not, or, sql, type Column, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, exists, isNotNull, not, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '#lib/server/db/index.js';
 import { book, order, orderAdjustment, orderItem, series } from '#lib/server/db/schema.js';
 import { isUniqueViolation } from '#lib/server/db/errors.js';
 import { logger } from '#lib/server/logger.js';
-import { trgmMatch } from '#lib/server/db/trgm.js';
+import { escapeLike, textScore, trgmMatch } from '#lib/server/db/trgm.js';
 import { deleteOwnedFile, requireOwnedFile } from '#lib/server/services/files.js';
-import { parseSearchTerm, tokenizeSearchQuery, type ParsedSearchTerm } from '#lib/shared/search.js';
+import { tokenize } from '#lib/shared/search.js';
 import {
 	CreateOrderAdjustmentSchema,
 	CreateOrderItemSchema,
@@ -19,117 +19,7 @@ import {
 	UpdateOrderAdjustmentSchema,
 	UpdateOrderSchema
 } from '#lib/shared/validation/order.js';
-
-type OrderSearchTerm = ParsedSearchTerm;
-
-const itemFields = new Set(['title', 'author', 'volume', 'paidprice', 'originalprice']);
-
-function escapeLike(value: string): string {
-	return value.replace(/[\\%_]/g, '\\$&');
-}
-
-function compareNumeric(column: Column | SQL, operator: string, value: string): SQL {
-	const target = Number(value);
-	if (Number.isNaN(target)) return sql`false`;
-
-	switch (operator) {
-		case '>':
-			return sql`${column} > ${target}`;
-		case '<':
-			return sql`${column} < ${target}`;
-		case '>=':
-			return sql`${column} >= ${target}`;
-		case '<=':
-			return sql`${column} <= ${target}`;
-		default:
-			return sql`${column} = ${target}`;
-	}
-}
-
-function compareDate(column: Column | SQL, operator: string, value: string): SQL {
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return sql`false`;
-
-	const safeOperator = ['>', '<', '>=', '<='].includes(operator) ? operator : '=';
-	return sql`${column}::date ${sql.raw(safeOperator)} ${value}::date`;
-}
-
-function orderItemCondition(term: OrderSearchTerm, userId: string): SQL {
-	const value = term.value;
-	let condition: SQL;
-
-	switch (term.field) {
-		case 'title':
-			condition = trgmMatch(series.title, value);
-			break;
-		case 'author':
-			condition = trgmMatch(sql`coalesce(${series.author}, '')`, value);
-			break;
-		case 'volume':
-			condition = compareNumeric(book.volumeNumber, term.operator, value);
-			break;
-		case 'paidprice':
-			condition = compareNumeric(book.paidPrice, term.operator, value);
-			break;
-		case 'originalprice':
-			condition = compareNumeric(book.originalPrice, term.operator, value);
-			break;
-		case '': {
-			const pattern = `%${escapeLike(value)}%`;
-			condition =
-				or(
-					trgmMatch(series.title, value),
-					trgmMatch(sql`coalesce(${series.author}, '')`, value),
-					sql`cast(${book.volumeNumber} as text) ilike ${pattern}`,
-					sql`cast(${book.paidPrice} as text) ilike ${pattern}`,
-					sql`cast(${book.originalPrice} as text) ilike ${pattern}`
-				) ?? sql`false`;
-			break;
-		}
-		default:
-			condition = sql`false`;
-	}
-
-	return exists(
-		db
-			.select({ matched: sql`1` })
-			.from(orderItem)
-			.innerJoin(book, eq(orderItem.bookId, book.id))
-			.innerJoin(series, eq(book.seriesId, series.id))
-			.where(and(eq(orderItem.orderId, order.id), eq(orderItem.userId, userId), condition))
-	);
-}
-
-function orderTermCondition(term: OrderSearchTerm, userId: string): SQL {
-	let condition: SQL;
-
-	switch (term.field) {
-		case 'order':
-			condition = trgmMatch(sql`coalesce(${order.orderNumber}, '')`, term.value);
-			break;
-		case 'store':
-			condition = trgmMatch(order.storeName, term.value);
-			break;
-		case 'note':
-			condition = trgmMatch(sql`coalesce(${order.note}, '')`, term.value);
-			break;
-		case 'date':
-			condition = compareDate(order.orderDate, term.operator, term.value);
-			break;
-		case '':
-			condition =
-				or(
-					trgmMatch(sql`coalesce(${order.orderNumber}, '')`, term.value),
-					trgmMatch(order.storeName, term.value),
-					trgmMatch(sql`coalesce(${order.note}, '')`, term.value)
-				) ?? sql`false`;
-			condition = or(condition, orderItemCondition(term, userId)) ?? condition;
-			break;
-		default:
-			condition = itemFields.has(term.field) ? orderItemCondition(term, userId) : sql`false`;
-	}
-
-	return term.negated ? not(condition) : condition;
-}
+import { orderSearchScore, orderTermCondition } from './orders/conditions.js';
 
 export const getOrders = query(
 	z.object({
@@ -146,21 +36,20 @@ export const getOrders = query(
 		}
 
 		const userId = locals.user.id;
-		const terms = params.search
-			? tokenizeSearchQuery(params.search)
-					.map(parseSearchTerm)
-					.filter((term) => term.value !== '')
-			: [];
+		const terms = params.search ? tokenize(params.search) : [];
 		const where = and(
 			eq(order.userId, userId),
 			...terms.map((term) => orderTermCondition(term, userId))
 		);
+		const score = terms.length > 0 ? orderSearchScore(terms) : null;
 
 		const [countRows, orders] = await Promise.all([
 			db.select({ count: count() }).from(order).where(where),
 			db.query.order.findMany({
 				where,
-				orderBy: [desc(order.orderDate), desc(order.id)],
+				orderBy: score
+					? [desc(score), desc(order.orderDate), desc(order.id)]
+					: [desc(order.orderDate), desc(order.id)],
 				limit: params.count,
 				offset: params.count * (params.page - 1),
 				with: {
@@ -193,6 +82,68 @@ export const getOrders = query(
 		logger.debug({ userId, orderCount: orders.length, total }, 'Fetched user orders');
 
 		return { orders, total };
+	}
+);
+
+const BOOK_SEARCH_LIMIT = 100;
+
+export const searchBooksForOrder = query(
+	z.object({
+		orderId: z.uuidv4(),
+		search: z.string().trim().min(1).max(200)
+	}),
+	async ({ orderId, search }) => {
+		const { locals } = getRequestEvent();
+
+		if (!locals.user) {
+			logger.warn('Unauthorized order book search attempt');
+			error(401, 'Unauthorized');
+		}
+
+		const userId = locals.user.id;
+		const [orderData] = await db
+			.select({ currencyCode: order.currencyCode })
+			.from(order)
+			.where(and(eq(order.id, orderId), eq(order.userId, userId)))
+			.limit(1);
+
+		if (!orderData) {
+			error(404, 'Order not found');
+		}
+
+		const pattern = `%${escapeLike(search)}%`;
+		const titleScore = textScore(series.title, search);
+		const rows = await db
+			.select({
+				id: book.id,
+				title: series.title,
+				volumeNumber: book.volumeNumber
+			})
+			.from(book)
+			.innerJoin(series, eq(book.seriesId, series.id))
+			.where(
+				and(
+					eq(book.userId, userId),
+					eq(book.currencyCode, orderData.currencyCode),
+					isNotNull(book.paidPrice),
+					not(
+						exists(
+							db
+								.select({ matched: sql`1` })
+								.from(orderItem)
+								.where(and(eq(orderItem.bookId, book.id), eq(orderItem.userId, userId)))
+						)
+					),
+					or(
+						trgmMatch(series.title, search),
+						sql`cast(${book.volumeNumber} as text) ilike ${pattern}`
+					)
+				)
+			)
+			.orderBy(desc(titleScore), asc(series.title), asc(book.volumeNumber))
+			.limit(BOOK_SEARCH_LIMIT);
+
+		return rows;
 	}
 );
 

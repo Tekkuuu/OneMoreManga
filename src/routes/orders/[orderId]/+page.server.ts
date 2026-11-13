@@ -1,6 +1,6 @@
 import { db } from '#lib/server/db/index.js';
-import { order, orderItem, book, series } from '#lib/server/db/schema.js';
-import { and, asc, eq, isNotNull, notInArray } from 'drizzle-orm';
+import { order } from '#lib/server/db/schema.js';
+import { and, eq } from 'drizzle-orm';
 import { error, redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { logger } from '#lib/server/logger.js';
@@ -33,36 +33,5 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		error(404, 'Order not found');
 	}
 
-	const orderedBooks = (
-		await db
-			.select({
-				bookId: orderItem.bookId
-			})
-			.from(orderItem)
-			.where(eq(orderItem.userId, locals.user.id))
-	).map((ob) => ob.bookId);
-
-	const books = await db
-		.select({
-			id: book.id,
-			volumeNumber: book.volumeNumber,
-			seriesId: book.seriesId,
-			title: series.title
-		})
-		.from(book)
-		.innerJoin(series, eq(book.seriesId, series.id))
-		.where(
-			and(
-				eq(book.userId, locals.user.id),
-				notInArray(book.id, orderedBooks),
-				// One order means one currency: only priced books matching the
-				// order's currency are eligible (gifts and foreign-priced books
-				// are rejected server-side in createOrderItem).
-				eq(book.currencyCode, orderData.currencyCode),
-				isNotNull(book.paidPrice)
-			)
-		)
-		.orderBy(asc(series.title), asc(book.volumeNumber));
-
-	return { order: orderData, books };
+	return { order: orderData };
 };

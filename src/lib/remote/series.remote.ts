@@ -1,19 +1,6 @@
 import { command, form, getRequestEvent, query } from '$app/server';
 import { error, invalid, redirect } from '@sveltejs/kit';
-import {
-	and,
-	asc,
-	count,
-	desc,
-	eq,
-	exists,
-	getTableColumns,
-	inArray,
-	not,
-	or,
-	sql,
-	SQL
-} from 'drizzle-orm';
+import { and, asc, count, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { book, genre, series, seriesGenre } from '#lib/server/db/schema.js';
 import { isUniqueViolation } from '#lib/server/db/errors.js';
@@ -27,33 +14,9 @@ import {
 } from '#lib/shared/validation/series.js';
 import { GenreNameSchema } from '#lib/shared/validation/genre.js';
 import { z } from 'zod';
-import { similarity, trgmMatch, wordSimilarity } from '#lib/server/db/trgm.js';
-import { getSearchTermValue, tokenizeSearchQuery } from '#lib/shared/search.js';
 import { findMissingVolumeNumbers } from '#lib/shared/series/missing-volumes.js';
-
-/**
- * @param title Series title.
- * @param author Series author; null maps to empty string.
- * @returns Key matching `unique_user_series_title_author`.
- */
-function seriesKey(title: string, author?: string | null): string {
-	return `${title.trim().toLowerCase()}\u0000${(author ?? '').trim().toLowerCase()}`;
-}
-
-/** Parse comma-separated genre names. Case-insensitive dedupe, first casing wins. */
-function parseGenreNames(raw: string): string[] {
-	const seen = new Set<string>();
-	const names: string[] = [];
-	for (const part of raw.split(',')) {
-		const name = part.trim();
-		if (!name) continue;
-		const key = name.toLowerCase();
-		if (seen.has(key)) continue;
-		seen.add(key);
-		names.push(name);
-	}
-	return names;
-}
+import { seriesSearchScore, seriesTermCondition } from './series/conditions.js';
+import { tokenize } from '#lib/shared/search.js';
 
 export const createSeries = form(CreateSeriesSchema, async (createdSeries, issue) => {
 	const { locals } = getRequestEvent();
@@ -138,7 +101,7 @@ export const createSeriesBatch = form(CreateSeriesBatchSchema, async (data, issu
 
 	const seen = new Map<string, number>();
 	rows.forEach((row, index) => {
-		const key = seriesKey(row.title, row.author);
+		const key = `${row.title.trim().toLowerCase()}\u0000${(row.author ?? '').trim().toLowerCase()}`;
 		if (seen.has(key)) {
 			issues.push(issue.series[index].title(`"${row.title}" is duplicated above`));
 		} else {
@@ -150,16 +113,36 @@ export const createSeriesBatch = form(CreateSeriesBatchSchema, async (data, issu
 		.select({ title: series.title, author: series.author })
 		.from(series)
 		.where(eq(series.userId, userId));
-	const existingKeys = new Set(existing.map((row) => seriesKey(row.title, row.author)));
+	const existingKeys = new Set(
+		existing.map(
+			(row) => `${row.title.trim().toLowerCase()}\u0000${(row.author ?? '').trim().toLowerCase()}`
+		)
+	);
 
 	rows.forEach((row, index) => {
-		if (existingKeys.has(seriesKey(row.title, row.author))) {
+		if (
+			existingKeys.has(
+				`${row.title.trim().toLowerCase()}\u0000${(row.author ?? '').trim().toLowerCase()}`
+			)
+		) {
 			issues.push(issue.series[index].title(`"${row.title}" already exists`));
 		}
 	});
 
 	// Reject the batch on the first invalid genre name, before any write.
-	const genreNamesPerRow = rows.map((row) => parseGenreNames(row.genres));
+	const genreNamesPerRow = rows.map((row) => {
+		const seen = new Set<string>();
+		const names: string[] = [];
+		for (const part of row.genres.split(',')) {
+			const name = part.trim();
+			if (!name) continue;
+			const key = name.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			names.push(name);
+		}
+		return names;
+	});
 	genreNamesPerRow.forEach((names, index) => {
 		for (const name of names) {
 			const parsed = GenreNameSchema.safeParse(name);
@@ -376,108 +359,6 @@ export const updateSeriesStatus = command(UpdateSeriesStatusSchema, async (data)
 		.where(and(eq(series.id, data.id), eq(series.userId, locals.user.id)));
 });
 
-type SeriesSearchTerm = {
-	field: string;
-	value: string;
-	negated: boolean;
-};
-
-function parseSeriesSearch(search: string): SeriesSearchTerm[] {
-	return tokenizeSearchQuery(search)
-		.map((rawTerm) => {
-			const { value: positiveTerm, negated } = getSearchTermValue(rawTerm);
-			const colon = positiveTerm.indexOf(':');
-			const field = colon === -1 ? '' : positiveTerm.slice(0, colon).toLowerCase();
-			const rawValue = colon === -1 ? positiveTerm : positiveTerm.slice(colon + 1);
-			const value = getSearchTermValue(rawValue.trim()).value;
-
-			return { field, value, negated };
-		})
-		.filter((term) => term.value !== '');
-}
-
-function seriesTermCondition(term: SeriesSearchTerm): SQL {
-	const titleMatch = trgmMatch(series.title, term.value);
-	const authorMatch = trgmMatch(sql`coalesce(${series.author}, '')`, term.value);
-	const genreMatch = exists(
-		db
-			.select({ one: sql`1` })
-			.from(seriesGenre)
-			.innerJoin(genre, eq(genre.id, seriesGenre.genreId))
-			.where(
-				and(
-					eq(seriesGenre.seriesId, series.id),
-					eq(genre.userId, series.userId),
-					trgmMatch(genre.name, term.value)
-				)
-			)
-	);
-
-	let condition: SQL;
-
-	switch (term.field) {
-		case 'title':
-			condition = titleMatch;
-			break;
-		case 'author':
-			condition = authorMatch;
-			break;
-		case 'genre':
-			condition = genreMatch;
-			break;
-		case '':
-			condition = or(titleMatch, authorMatch, genreMatch) ?? sql`false`;
-			break;
-		default:
-			condition = sql`false`;
-	}
-
-	return term.negated ? not(condition) : condition;
-}
-
-function seriesSearchScore(terms: SeriesSearchTerm[]): SQL<number> | null {
-	const positiveTerms = terms.filter((term) => !term.negated);
-
-	if (positiveTerms.length === 0) {
-		return null;
-	}
-
-	const parts = positiveTerms.map((term) => {
-		const titleScore = sql<number>`greatest(
-			${similarity(series.title, term.value)},
-			${wordSimilarity(term.value, series.title)}
-		)`;
-		const authorScore = sql<number>`greatest(
-			${similarity(sql`coalesce(${series.author}, '')`, term.value)},
-			${wordSimilarity(term.value, sql`coalesce(${series.author}, '')`)}
-		)`;
-		const genreScore = sql<number>`(
-      select coalesce(max(greatest(
-        similarity(g.name, ${term.value}),
-        word_similarity(${term.value}, g.name)
-      )), 0)
-      from series_genre sg
-      join genre g on g.id = sg.genre_id
-      where sg.series_id = ${series.id}
-    )`;
-
-		switch (term.field) {
-			case 'title':
-				return titleScore;
-			case 'author':
-				return authorScore;
-			case 'genre':
-				return genreScore;
-			case '':
-				return sql<number>`greatest(${titleScore}, ${authorScore}, ${genreScore})`;
-			default:
-				return sql<number>`0`;
-		}
-	});
-
-	return sql<number>`(${sql.join(parts, sql` + `)})`;
-}
-
 export const getSeries = query(
 	z.object({
 		count: z.number().int().positive(),
@@ -493,7 +374,7 @@ export const getSeries = query(
 		}
 
 		const userId = locals.user.id;
-		const terms = params.search ? parseSeriesSearch(params.search) : [];
+		const terms = params.search ? tokenize(params.search) : [];
 		const where = and(eq(series.userId, userId), ...terms.map(seriesTermCondition));
 		const score = terms.length > 0 ? seriesSearchScore(terms) : null;
 		const selection = db
