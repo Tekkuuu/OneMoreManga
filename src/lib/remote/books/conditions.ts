@@ -1,19 +1,38 @@
-import { and, eq, exists, sql, type SQL } from 'drizzle-orm';
+import { and, eq, exists, not, sql, type SQL } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { book, order, orderItem, series } from '#lib/server/db/schema.js';
 import {
+	columnIsEmpty,
+	columnIsNull,
 	compareDate,
 	compareEnum,
 	compareNumeric,
+	emptyKeyword,
+	isEmptyKeyword,
 	orElseFalse,
 	textScore,
 	tokenCondition,
 	trgmMatch
 } from '#lib/server/db/trgm.js';
-import { genreMatch } from '../series/conditions.js';
+import { genreExists, genreMatch } from '../series/conditions.js';
 import type { SearchToken } from '#lib/shared/search.js';
 
 function bookOrderCondition(term: SearchToken, userId: string): SQL {
+	// Empty here means "volume in no order": must replace the EXISTS below,
+	// nesting it inside would be false for every book.
+	if (!term.quoted && isEmptyKeyword(term.value)) {
+		const noOrder = not(
+			exists(
+				db
+					.select({ one: sql`1` })
+					.from(orderItem)
+					.where(and(eq(orderItem.bookId, book.id), eq(orderItem.userId, userId)))
+			)
+		);
+		const cond = term.operator === '!=' ? not(noOrder) : noOrder;
+		// tokenCondition already applies `-` negation — do not negate here.
+		return cond;
+	}
 	const condition = tokenCondition(
 		term,
 		{
@@ -43,28 +62,53 @@ export function bookTermCondition(term: SearchToken, userId: string): SQL {
 	return tokenCondition(
 		term,
 		{
-			title: (v) => trgmMatch(series.title, v),
-			author: (v) => trgmMatch(sql`coalesce(${series.author}, '')`, v),
-			genre: (v) => genreMatch(v),
-			volume: (v, op) => compareNumeric(book.volumeNumber, op, v),
-			isbn: (v) => trgmMatch(sql`coalesce(${book.isbn}, '')`, v),
-			status: (v, op) => compareEnum(book.status, op, v),
-			readstatus: (v, op) => compareEnum(book.readStatus, op, v),
-			currency: (v, op) =>
-				op === '!='
-					? sql`lower(${book.currencyCode}) != lower(${v})`
-					: sql`lower(${book.currencyCode}) = lower(${v})`,
-			paidprice: (v, op) => compareNumeric(book.paidPrice, op, v),
-			originalprice: (v, op) => compareNumeric(book.originalPrice, op, v),
-			boughtat: (v, op) => {
-				if (!/^\d{4}-\d{2}$/.test(v)) return sql`false`;
-				return op === '!='
-					? sql`to_char(${book.boughtAt}, 'YYYY-MM') != ${v}`
-					: sql`to_char(${book.boughtAt}, 'YYYY-MM') = ${v}`;
-			},
-			startedat: (v, op) => compareDate(book.startedAt, op, v),
-			completedat: (v, op) => compareDate(book.completedAt, op, v),
-			readcount: (v, op) => compareNumeric(book.readCount, op, v)
+			title: (v, op, q) => emptyKeyword(v, op, q, sql`false`, () => trgmMatch(series.title, v)),
+			author: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsEmpty(series.author), () =>
+					trgmMatch(sql`coalesce(${series.author}, '')`, v)
+				),
+			genre: (v, op, q) => emptyKeyword(v, op, q, not(genreExists()), () => genreMatch(v)),
+			volume: (v, op, q) =>
+				emptyKeyword(v, op, q, sql`false`, () => compareNumeric(book.volumeNumber, op, v)),
+			isbn: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsEmpty(book.isbn), () =>
+					trgmMatch(sql`coalesce(${book.isbn}, '')`, v)
+				),
+			status: (v, op, q) =>
+				emptyKeyword(v, op, q, sql`false`, () => compareEnum(book.status, op, v)),
+			readstatus: (v, op, q) =>
+				emptyKeyword(v, op, q, sql`false`, () => compareEnum(book.readStatus, op, v)),
+			currency: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsEmpty(book.currencyCode), () =>
+					op === '!='
+						? sql`lower(${book.currencyCode}) != lower(${v})`
+						: sql`lower(${book.currencyCode}) = lower(${v})`
+				),
+			paidprice: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsNull(book.paidPrice), () =>
+					compareNumeric(book.paidPrice, op, v)
+				),
+			originalprice: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsNull(book.originalPrice), () =>
+					compareNumeric(book.originalPrice, op, v)
+				),
+			boughtat: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsNull(book.boughtAt), () => {
+					if (!/^\d{4}-\d{2}$/.test(v)) return sql`false`;
+					return op === '!='
+						? sql`to_char(${book.boughtAt}, 'YYYY-MM') != ${v}`
+						: sql`to_char(${book.boughtAt}, 'YYYY-MM') = ${v}`;
+				}),
+			startedat: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsNull(book.startedAt), () =>
+					compareDate(book.startedAt, op, v)
+				),
+			completedat: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsNull(book.completedAt), () =>
+					compareDate(book.completedAt, op, v)
+				),
+			readcount: (v, op, q) =>
+				emptyKeyword(v, op, q, sql`false`, () => compareNumeric(book.readCount, op, v))
 		},
 		(v) =>
 			orElseFalse(

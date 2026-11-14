@@ -266,7 +266,8 @@
 				'paidprice:>10',
 				'date:>=2024-01-01',
 				'-store:Amazon',
-				'store:Amazon paidprice:>10'
+				'store:Amazon paidprice:>10',
+				'note:empty'
 			]}
 			operators={m.orders_search_help_operators()}
 		/>

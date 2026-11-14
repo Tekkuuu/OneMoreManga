@@ -2,8 +2,11 @@ import { and, eq, exists, sql, type SQL } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { book, order, orderItem, series } from '#lib/server/db/schema.js';
 import {
+	columnIsEmpty,
+	columnIsNull,
 	compareDate,
 	compareNumeric,
+	emptyKeyword,
 	orElseFalse,
 	textScore,
 	tokenCondition,
@@ -17,11 +20,21 @@ export function orderItemCondition(term: SearchToken, userId: string): SQL {
 	const condition = tokenCondition(
 		term,
 		{
-			title: (v) => trgmMatch(series.title, v),
-			author: (v) => trgmMatch(sql`coalesce(${series.author}, '')`, v),
-			volume: (v, op) => compareNumeric(book.volumeNumber, op, v),
-			paidprice: (v, op) => compareNumeric(book.paidPrice, op, v),
-			originalprice: (v, op) => compareNumeric(book.originalPrice, op, v)
+			title: (v, op, q) => emptyKeyword(v, op, q, sql`false`, () => trgmMatch(series.title, v)),
+			author: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsEmpty(series.author), () =>
+					trgmMatch(sql`coalesce(${series.author}, '')`, v)
+				),
+			volume: (v, op, q) =>
+				emptyKeyword(v, op, q, sql`false`, () => compareNumeric(book.volumeNumber, op, v)),
+			paidprice: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsNull(book.paidPrice), () =>
+					compareNumeric(book.paidPrice, op, v)
+				),
+			originalprice: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsNull(book.originalPrice), () =>
+					compareNumeric(book.originalPrice, op, v)
+				)
 		},
 		(v) =>
 			orElseFalse(trgmMatch(series.title, v), trgmMatch(sql`coalesce(${series.author}, '')`, v))
@@ -41,10 +54,17 @@ export function orderTermCondition(term: SearchToken, userId: string): SQL {
 	return tokenCondition(
 		term,
 		{
-			order: (v) => trgmMatch(sql`coalesce(${order.orderNumber}, '')`, v),
-			store: (v) => trgmMatch(order.storeName, v),
-			note: (v) => trgmMatch(sql`coalesce(${order.note}, '')`, v),
-			date: (v, op) => compareDate(order.orderDate, op, v)
+			order: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsEmpty(order.orderNumber), () =>
+					trgmMatch(sql`coalesce(${order.orderNumber}, '')`, v)
+				),
+			store: (v, op, q) => emptyKeyword(v, op, q, sql`false`, () => trgmMatch(order.storeName, v)),
+			note: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsEmpty(order.note), () =>
+					trgmMatch(sql`coalesce(${order.note}, '')`, v)
+				),
+			date: (v, op, q) =>
+				emptyKeyword(v, op, q, sql`false`, () => compareDate(order.orderDate, op, v))
 		},
 		(v) =>
 			orElseFalse(

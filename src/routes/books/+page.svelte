@@ -229,7 +229,8 @@
 				'paidprice:>39.99',
 				'boughtat:2024-01',
 				'orderdate:>30d',
-				'-status:Wishlist'
+				'-status:Wishlist',
+				'isbn:empty'
 			]}
 			operators={m.books_search_help_operators()}
 		/>

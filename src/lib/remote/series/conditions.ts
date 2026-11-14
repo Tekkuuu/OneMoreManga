@@ -1,7 +1,14 @@
-import { and, eq, exists, sql, type SQL } from 'drizzle-orm';
+import { and, eq, exists, not, sql, type SQL } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { genre, series, seriesGenre } from '#lib/server/db/schema.js';
-import { orElseFalse, textScore, tokenCondition, trgmMatch } from '#lib/server/db/trgm.js';
+import {
+	columnIsEmpty,
+	emptyKeyword,
+	orElseFalse,
+	textScore,
+	tokenCondition,
+	trgmMatch
+} from '#lib/server/db/trgm.js';
 import type { SearchToken } from '#lib/shared/search.js';
 
 export function genreMatch(value: string): SQL {
@@ -20,13 +27,26 @@ export function genreMatch(value: string): SQL {
 	);
 }
 
+export function genreExists(): SQL {
+	return exists(
+		db
+			.select({ one: sql`1` })
+			.from(seriesGenre)
+			.innerJoin(genre, eq(genre.id, seriesGenre.genreId))
+			.where(and(eq(seriesGenre.seriesId, series.id), eq(genre.userId, series.userId)))
+	);
+}
+
 export function seriesTermCondition(term: SearchToken): SQL {
 	return tokenCondition(
 		term,
 		{
-			title: (v) => trgmMatch(series.title, v),
-			author: (v) => trgmMatch(sql`coalesce(${series.author}, '')`, v),
-			genre: (v) => genreMatch(v)
+			title: (v, op, q) => emptyKeyword(v, op, q, sql`false`, () => trgmMatch(series.title, v)),
+			author: (v, op, q) =>
+				emptyKeyword(v, op, q, columnIsEmpty(series.author), () =>
+					trgmMatch(sql`coalesce(${series.author}, '')`, v)
+				),
+			genre: (v, op, q) => emptyKeyword(v, op, q, not(genreExists()), () => genreMatch(v))
 		},
 		(v) =>
 			orElseFalse(

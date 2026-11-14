@@ -53,16 +53,46 @@ export function orElseFalse(...conditions: SQL[]): SQL {
 	return or(...conditions) ?? sql`false`;
 }
 
+/** Unquoted `empty` value check (`field:empty`). */
+export function isEmptyKeyword(value: string): boolean {
+	return value.trim().toLowerCase() === 'empty';
+}
+
+/** `NULL` or `''` (nullable text columns). Parenthesized: the `OR` must not leak out of an `AND` chain. */
+export function columnIsEmpty(column: Column | SQL): SQL {
+	return sql`(${column} is null or ${column} = '')`;
+}
+
+/** `NULL` (nullable non-text columns). */
+export function columnIsNull(column: Column | SQL): SQL {
+	return sql`${column} is null`;
+}
+
+/**
+ * Routes unquoted `:empty` to an emptiness check, otherwise runs the matcher.
+ * Quoted values are always literal; `!=` inverts.
+ */
+export function emptyKeyword(
+	value: string,
+	operator: SearchOperator,
+	quoted: boolean,
+	emptyCondition: SQL,
+	otherwise: () => SQL
+): SQL {
+	if (quoted || !isEmptyKeyword(value)) return otherwise();
+	return operator === '!=' ? not(emptyCondition) : emptyCondition;
+}
+
 export function tokenCondition(
 	token: SearchToken,
-	fields: Record<string, (value: string, operator: SearchOperator) => SQL>,
+	fields: Record<string, (value: string, operator: SearchOperator, quoted: boolean) => SQL>,
 	bare: (value: string) => SQL,
 	unknownKey?: (key: string) => SQL
 ): SQL {
 	const handle = fields[token.key];
 	let condition: SQL;
 	if (token.key === '') condition = bare(token.value);
-	else if (handle) condition = handle(token.value, token.operator);
+	else if (handle) condition = handle(token.value, token.operator, token.quoted);
 	else condition = unknownKey ? unknownKey(token.key) : sql`false`;
 	return token.negate ? not(condition) : condition;
 }

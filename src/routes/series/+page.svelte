@@ -347,7 +347,8 @@
 						'author:"Kentarō Miura"',
 						'genre:Action',
 						'title:"Attack on Titan"',
-						'-author:Kentaro'
+						'-author:Kentaro',
+						'author:empty'
 					]}
 					operators={m.series_search_help_operators()}
 				/>

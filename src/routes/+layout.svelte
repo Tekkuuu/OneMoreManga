@@ -224,7 +224,6 @@
 
 						<Menu.Item
 							value="preferences"
-							disabled
 							class="btn w-full justify-start gap-2 opacity-50 data-disabled:pointer-events-none"
 						>
 							<Brush class="size-4" />

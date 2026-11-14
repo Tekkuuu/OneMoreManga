@@ -4,6 +4,8 @@ export type SearchToken = {
 	operator: SearchOperator;
 	key: string;
 	value: string;
+	/** Whether the value was wrapped in quotes (quoted values are always literal). */
+	quoted: boolean;
 };
 
 export function tokenize(query: string): SearchToken[] {
@@ -55,10 +57,13 @@ export function tokenize(query: string): SearchToken[] {
 			valuePart = match?.[2] ?? rawValue;
 		}
 
-		const value = valuePart.trim().replace(/^"(.*)"$/, '$1');
+		const trimmedPart = valuePart.trim();
+		const quoted =
+			trimmedPart.length >= 2 && trimmedPart.startsWith('"') && trimmedPart.endsWith('"');
+		const value = trimmedPart.replace(/^"(.*)"$/, '$1');
 		if (value === '') continue;
 
-		tokens.push({ negate, operator, key: field, value });
+		tokens.push({ negate, operator, key: field, value, quoted });
 	}
 	return tokens;
 }
