@@ -36,6 +36,17 @@ export type ReadingCalendarData = {
 	planned: CalendarPlannedRead[];
 };
 
+export type PlannedReadingItem = {
+	id: string;
+	bookId: string;
+	seriesId: string;
+	seriesTitle: string;
+	author: string | null;
+	coverFileId: string | null;
+	volumeNumber: number;
+	plannedDate: string;
+};
+
 export const getReadingCalendar = query(async (): Promise<ReadingCalendarData> => {
 	const { locals } = getRequestEvent();
 
@@ -158,4 +169,60 @@ export const unscheduleReading = command(UnscheduleReadingSchema, async (data) =
 	await db
 		.delete(readingPlanItem)
 		.where(and(eq(readingPlanItem.id, data.id), eq(readingPlanItem.userId, locals.user.id)));
+});
+
+export const plannedReading = query(async (): Promise<PlannedReadingItem[]> => {
+	const { locals } = getRequestEvent();
+
+	if (!locals.user) {
+		logger.warn('Unauthorized planned reading fetch');
+		error(401, 'Unauthorized');
+	}
+
+	const data = await db
+		.select({
+			id: readingPlanItem.id,
+			bookId: book.id,
+			seriesId: series.id,
+			seriesTitle: series.title,
+			author: series.author,
+			coverFileId: book.coverFileId,
+			volumeNumber: book.volumeNumber,
+			plannedDate: readingPlanItem.plannedDate
+		})
+		.from(readingPlanItem)
+		.innerJoin(book, eq(readingPlanItem.bookId, book.id))
+		.innerJoin(series, eq(book.seriesId, series.id))
+		.where(eq(readingPlanItem.userId, locals.user.id))
+		.orderBy(asc(readingPlanItem.plannedDate), asc(series.title), asc(book.volumeNumber));
+
+	return data;
+});
+
+export const getSchedulableVolumes = query(async (): Promise<CalendarRemainingVolume[]> => {
+	const { locals } = getRequestEvent();
+
+	if (!locals.user) {
+		logger.warn('Unauthorized schedulable volumes fetch');
+		error(401, 'Unauthorized');
+	}
+
+	return db
+		.select({
+			bookId: book.id,
+			seriesId: series.id,
+			seriesTitle: series.title,
+			author: series.author,
+			volumeNumber: book.volumeNumber
+		})
+		.from(book)
+		.innerJoin(series, eq(series.id, book.seriesId))
+		.where(
+			and(
+				eq(book.userId, locals.user.id),
+				eq(book.status, 'Owned'),
+				ne(book.readStatus, 'Completed')
+			)
+		)
+		.orderBy(asc(series.title), asc(book.volumeNumber));
 });

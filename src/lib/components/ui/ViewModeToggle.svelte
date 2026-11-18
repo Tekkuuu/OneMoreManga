@@ -5,6 +5,7 @@
 
 	interface Props {
 		class?: string;
+		ariaLabel?: string;
 		value: string;
 		viewModes: {
 			value: string;
@@ -13,13 +14,18 @@
 		}[];
 	}
 
-	let { value = $bindable(), viewModes, ...props }: Props = $props();
+	let { value = $bindable(), viewModes, ariaLabel, ...props }: Props = $props();
 </script>
 
-<ToggleGroup.Root bind:value type="single" class={twMerge('field-group flex gap-0', props.class)}>
+<ToggleGroup.Root
+	bind:value
+	type="single"
+	aria-label={ariaLabel}
+	class={twMerge('field-group flex gap-0', props.class)}
+>
 	{#each viewModes as vm}
 		<ToggleGroup.Item
-			aria-label="toggle bold"
+			aria-label={vm.text ?? vm.value}
 			value={vm.value}
 			class={['btn', vm.value === value ? 'preset-filled-surface-950-50' : 'preset-tonal']}
 		>
